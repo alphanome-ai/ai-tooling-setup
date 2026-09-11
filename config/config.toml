@@ -3,7 +3,7 @@ model_provider = "cloudflare-ai-gateway"
 model = "deepseek-flash"
 model_reasoning_effort = "medium"
 
-model_catalog_json = "~/.codex/codex-models-with-deepseek.json"
+model_catalog_json = "~/.codex/alp-cf-models.json"
 
 # ---------- Cloudflare AI Gateway ----------
 
