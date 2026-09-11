@@ -3,9 +3,10 @@
     Configures the Codex CLI for Alphanome's Cloudflare AI Gateway (DeepSeek V4.1-Flash).
 
 .DESCRIPTION
-    Writes these two files into %USERPROFILE%\.codex\:
-        config.toml
-        codex-models-with-deepseek.json  (copied from .\config\)
+    Installs into %USERPROFILE%\.codex\, from .\config\ (the source of truth):
+        config.toml         .\config\config.toml is prepended to the existing
+                            file (inside marker comments, so re-runs replace it)
+        alp-cf-models.json  copied as-is
 
     Checks for the Codex CLI and cloudflared first. cloudflared is installed
     automatically when possible; if anything is missing the script explains how
@@ -30,12 +31,15 @@ $ErrorActionPreference = "Stop"
 $TargetDir           = Join-Path $HOME ".codex"
 $CloudflaredReleases = "https://github.com/cloudflare/cloudflared/releases/latest/download"
 
-# The model catalog (a clone of Codex's gpt-5.5 entry) ships next to this script.
-$CatalogSrc = Join-Path $PSScriptRoot "config\codex-models-with-deepseek.json"
-if (-not (Test-Path $CatalogSrc)) {
-    [Console]::Error.WriteLine("error: model catalog not found: $CatalogSrc")
-    [Console]::Error.WriteLine("error: Run this script from a full checkout of the repository.")
-    exit 1
+# The config and model catalog ship next to this script.
+$TomlSrc    = Join-Path $PSScriptRoot "config\config.toml"
+$CatalogSrc = Join-Path $PSScriptRoot "config\alp-cf-models.json"
+foreach ($f in $TomlSrc, $CatalogSrc) {
+    if (-not (Test-Path $f)) {
+        [Console]::Error.WriteLine("error: file not found: $f")
+        [Console]::Error.WriteLine("error: Run this script from a full checkout of the repository.")
+        exit 1
+    }
 }
 
 # Use [Console]::Error for warnings/errors: Write-Error would become a
@@ -170,32 +174,40 @@ if (-not (Test-Path $TargetDir)) {
     New-Item -ItemType Directory -Path $TargetDir | Out-Null
 }
 
-$TomlContent = @"
-# ---------- Model selection ----------
-model_provider = "cloudflare-ai-gateway"
-model = "deepseek-flash"
-model_reasoning_effort = "medium"
+$ConfigPath = Join-Path $TargetDir "config.toml"
+$BeginMark  = "# >>> alphanome codex setup >>>"
+$EndMark    = "# <<< alphanome codex setup <<<"
 
-model_catalog_json = "~/.codex/codex-models-with-deepseek.json"
+# TOML has no way to close a [table], so keys after a header belong to it.
+# Our file is therefore split at its first [table] header: its top-level keys
+# go at the very top (before any of the user's tables) and its tables go at
+# the very bottom (so they can't capture the user's top-level keys).
+# Marked blocks from a previous run are stripped, so re-runs never duplicate keys.
+# ponytail: header detection is a line starting with "[", fine while
+# config\config.toml has no multi-line arrays at the top level.
+$head = [System.Collections.Generic.List[string]]::new()
+$tail = [System.Collections.Generic.List[string]]::new()
+$inTables = $false
+foreach ($line in [System.IO.File]::ReadAllLines($TomlSrc)) {
+    if ($line -match '^\[') { $inTables = $true }
+    if ($inTables) { $tail.Add($line) } else { $head.Add($line) }
+}
 
-# ---------- Cloudflare AI Gateway ----------
+$lines = [System.Collections.Generic.List[string]]::new()
+$lines.Add($BeginMark); $lines.AddRange($head); $lines.Add($EndMark)
+if (Test-Path $ConfigPath) {
+    Copy-Item -Path $ConfigPath -Destination "$ConfigPath.bak" -Force
+    $skip = $false
+    foreach ($line in [System.IO.File]::ReadAllLines($ConfigPath)) {
+        if ($line -eq $BeginMark) { $skip = $true;  continue }
+        if ($line -eq $EndMark)   { $skip = $false; continue }
+        if (-not $skip) { $lines.Add($line) }
+    }
+}
+$lines.Add($BeginMark); $lines.AddRange($tail); $lines.Add($EndMark)
+Write-Utf8NoBom -Path $ConfigPath -Content (($lines -join "`n") + "`n")
 
-[model_providers.cloudflare-ai-gateway]
-name = "Alphanome"
-base_url = "https://inference.domesly.com/deepseek"
-wire_api = "responses"
-
-# Per-token cost reported to the gateway, in USD per token.
-http_headers = { "cf-aig-custom-cost" = '{"per_token_in":0.0000003,"per_token_out":0.0000012,"per_cache_read_token":0.000000006,"per_cache_write_token":0.000000006}' }
-
-[model_providers.cloudflare-ai-gateway.auth]
-command = "cloudflared"
-args = ["access", "login", "--no-verbose", "https://inference.domesly.com"]
-timeout_ms = 30000
-refresh_interval_ms = 0
-"@
-
-Write-Utf8NoBom -Path (Join-Path $TargetDir "config.toml") -Content $TomlContent
-Copy-Item -Path $CatalogSrc -Destination (Join-Path $TargetDir "codex-models-with-deepseek.json") -Force
+# Copied under its own name, which model_catalog_json in config.toml points at.
+Copy-Item -Path $CatalogSrc -Destination $TargetDir -Force
 
 Write-Host "Successfully written configuration files to $TargetDir"

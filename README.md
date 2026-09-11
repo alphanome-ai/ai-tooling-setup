@@ -4,9 +4,10 @@ One-shot setup scripts that point the Codex CLI at Alphanome's Cloudflare AI
 Gateway endpoint and register **DeepSeek V4.1-Flash** as the default model.
 
 Both scripts resolve the current user's home directory at runtime, so there is
-nothing user-specific to edit before distributing them. They copy the model
-catalog from `config/codex-models-with-deepseek.json`, so **run them from a full
-checkout of this repository**, not as standalone downloads.
+nothing user-specific to edit before distributing them. They read
+`config/config.toml` and `config/alp-cf-models.json` — the source of truth —
+so **run them from a full checkout of this repository**, not as standalone
+downloads. To change what gets installed, edit those two files, not the scripts.
 They also **check that their prerequisites are present before writing anything**,
 so a machine that is missing the Codex CLI or cloudflared gets clear install
 instructions instead of a silently useless config.
@@ -18,18 +19,40 @@ instructions instead of a silently useless config.
 
 ## What it installs
 
-Each script writes exactly two files into your Codex config directory:
+Each script touches two files in your Codex config directory:
 
-| File | Purpose |
+| File | What happens |
 | --- | --- |
-| `~/.codex/config.toml` | Model selection, the `cloudflare-ai-gateway` provider, its auth command, and per-token cost headers. |
-| `~/.codex/codex-models-with-deepseek.json` | The model catalog entry for `deepseek-flash`: Codex's `gpt-5.5` harness with the model swapped. |
-
-Both are written as **UTF-8 without a BOM**, since TOML and strict JSON parsers
-can reject a leading byte-order mark.
+| `~/.codex/config.toml` | `config/config.toml` is merged into it (see below). Your existing settings are kept, and a backup is saved as `config.toml.bak`. |
+| `~/.codex/alp-cf-models.json` | Copied from `config/alp-cf-models.json`, replacing any previous copy. |
 
 The filename of the JSON is not arbitrary — it must match `model_catalog_json`
-inside `config.toml`. If you rename one, rename both.
+inside `config/config.toml`. If you rename one, rename both.
+
+### How config.toml is merged
+
+In TOML, every key after a `[table]` header belongs to that table, and there is
+no way to close a table. So the script can't just paste the whole file on top:
+your top-level keys would land inside our last table. Instead it splits
+`config/config.toml` at its first `[table]` header:
+
+```toml
+# >>> alphanome codex setup >>>
+model = "deepseek-flash"          # our top-level keys: top of the file
+...
+# <<< alphanome codex setup <<<
+approval_policy = "never"         # your existing config, unchanged
+[mcp_servers.foo]
+...
+# >>> alphanome codex setup >>>
+[model_providers.cloudflare-ai-gateway]   # our tables: bottom of the file
+...
+# <<< alphanome codex setup <<<
+```
+
+On each run, the script first removes any blocks between those markers, so
+running it again replaces them instead of adding a second copy. Don't edit
+inside the markers; your changes would be lost on the next run.
 
 ## Prerequisite checks
 
@@ -54,7 +77,7 @@ automatically using whatever is available, in this order:
 
 | Platform | Mechanism |
 | --- | --- |
-| macOS, Linuxbrew | `brew install cloudflared` |
+| macos | `brew install cloudflared` |
 | Debian / Ubuntu | `.deb` from Cloudflare's release page, installed via `dpkg` |
 | RHEL / Fedora / Amazon Linux | `.rpm` from Cloudflare's release page, installed via `rpm` |
 | Other Linux | static binary installed to `/usr/local/bin/cloudflared` |
@@ -115,15 +138,16 @@ powershell -ExecutionPolicy Bypass -File setup-codex.ps1 -SkipPrereqChecks
 
 **1. Confirm both files landed:**
 ```bash
-ls -la ~/.codex/config.toml ~/.codex/codex-models-with-deepseek.json
+ls -la ~/.codex/config.toml ~/.codex/alp-cf-models.json
 ```
 ```powershell
-Get-ChildItem "$HOME\.codex\config.toml", "$HOME\.codex\codex-models-with-deepseek.json"
+Get-ChildItem "$HOME\.codex\config.toml", "$HOME\.codex\alp-cf-models.json"
 ```
 
-**2. Confirm the JSON is valid:**
+**2. Confirm both files parse:**
 ```bash
-python3 -m json.tool ~/.codex/codex-models-with-deepseek.json > /dev/null && echo "JSON OK"
+python3 -m json.tool ~/.codex/alp-cf-models.json > /dev/null && echo "JSON OK"
+python3 -c "import tomllib; tomllib.load(open('$HOME/.codex/config.toml', 'rb'))" && echo "TOML OK"
 ```
 
 **3. Confirm the tools are visible:**
@@ -139,32 +163,7 @@ up correctly.
 
 ## Configuration reference
 
-The generated `config.toml` in full:
-
-```toml
-# ---------- Model selection ----------
-model_provider = "cloudflare-ai-gateway"
-model = "deepseek-flash"
-model_reasoning_effort = "medium"
-
-model_catalog_json = "~/.codex/codex-models-with-deepseek.json"
-
-# ---------- Cloudflare AI Gateway ----------
-
-[model_providers.cloudflare-ai-gateway]
-name = "Alphanome"
-base_url = "https://inference.domesly.com/deepseek"
-wire_api = "responses"
-
-# Per-token cost reported to the gateway, in USD per token.
-http_headers = { "cf-aig-custom-cost" = '{"per_token_in":0.0000003,"per_token_out":0.0000012,"per_cache_read_token":0.000000006,"per_cache_write_token":0.000000006}' }
-
-[model_providers.cloudflare-ai-gateway.auth]
-command = "cloudflared"
-args = ["access", "login", "--no-verbose", "https://inference.domesly.com"]
-timeout_ms = 30000
-refresh_interval_ms = 0
-```
+The keys in [`config/config.toml`](config/config.toml):
 
 | Key | Meaning |
 | --- | --- |
@@ -213,24 +212,25 @@ OpenAI's servers.
 
 ## Customizing
 
-**Change the default reasoning effort** — edit `model_reasoning_effort` in
-`~/.codex/config.toml` after running the script, or change the default in the
-script before distributing it.
+Make org-wide changes in `config/config.toml` and re-run the script. Edits
+inside the markers in `~/.codex/config.toml` are lost on the next run.
 
-**Change the default model** — update `model` in `config.toml` to any slug
-present in the catalog.
+**Change the default reasoning effort** — edit `model_reasoning_effort`.
 
-**Update per-token pricing** — edit the `cf-aig-custom-cost` object in
-`config.toml`. Values are USD per token, so `0.0000012` is $1.20 per million.
+**Change the default model** — update `model` to any slug present in the
+catalog.
+
+**Update per-token pricing** — edit the `cf-aig-custom-cost` object. Values are
+USD per token, so `0.0000012` is $1.20 per million.
 
 ## Known limitations
 
-- **The scripts overwrite `config.toml`.** There is no backup step and no merge.
-  Any existing providers, models, plugin, or MCP settings in that file are replaced.
-  Back it up first if you have an existing Codex configuration:
-  ```bash
-  cp ~/.codex/config.toml ~/.codex/config.toml.bak
-  ```
+- **Keys you already set are not deduplicated.** If your existing
+  `config.toml` sets a key the script also sets (for example your own
+  `model = ...` or `model_provider = ...`), the merged file defines it twice. That's a
+  TOML error and Codex won't start. Delete your copy of that key and keep ours.
+- **`config.toml.bak` only holds the previous run's file.** Each run overwrites
+  it, so running twice leaves a backup that already has the Alphanome blocks.
 - **`model_catalog_json` uses a literal `~`.** This is the only path in the
   file. It works if Codex expands `~` itself, which is verified on macOS. If a
   platform does not expand it (Windows is untested), replace the value with an
@@ -246,11 +246,13 @@ present in the catalog.
 
 ## Uninstall / revert
 
-The scripts create only the two config files. To revert:
+To revert, delete the catalog and remove the marked blocks from
+`config.toml`, leaving your own settings in place:
 
 ```bash
-rm -f ~/.codex/codex-models-with-deepseek.json
-rm -f ~/.codex/config.toml   # or: mv ~/.codex/config.toml.bak ~/.codex/config.toml
+rm -f ~/.codex/alp-cf-models.json
+awk '/^# >>> alphanome codex setup >>>$/ {s=1; next} /^# <<< alphanome codex setup <<<$/ {s=0; next} !s' \
+  ~/.codex/config.toml > ~/.codex/config.toml.tmp && mv ~/.codex/config.toml.tmp ~/.codex/config.toml
 ```
 
 If the script installed cloudflared for you, remove it separately with the same
@@ -267,6 +269,7 @@ in place.
 | `Automatic installation failed or is not supported on this system.` | No supported package manager, no network, or no `sudo` | Follow the printed manual instructions, then re-run. |
 | `Missing prerequisites; config was NOT written.` | One of the two checks failed | Fix the reported item, or use `--skip-prereq-checks` / `-SkipPrereqChecks`. |
 | `error: unknown option: --foo` | Typo in a flag | Run with `--help`. |
+| Codex reports a duplicate key in `config.toml` | Your existing config already set a key that `config/config.toml` sets | Delete your copy of that key (outside the markers). |
 | `cloudflared: command not found` at request time | It was installed after the shell started | Restart the shell, or check your `PATH`. |
 | Browser opens but requests still fail | Cloudflare Access login not completed, or not authorized for the app | Re-run and finish the browser login; confirm you're a member of the Access policy. |
 | `403` / `Unauthorized` from the gateway | Authenticated, but not authorized for `inference.domesly.com` | Request access from whoever administers the Cloudflare Access application. |

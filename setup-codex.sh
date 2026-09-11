@@ -1,9 +1,10 @@
 #!/bin/sh
 # Codex CLI setup for Alphanome's Cloudflare AI Gateway (DeepSeek V4.1-Flash).
 #
-# Writes these two files into $HOME/.codex/:
-#   config.toml
-#   codex-models-with-deepseek.json  (copied from ./config/)
+# Installs into $HOME/.codex/, from ./config/ (the source of truth):
+#   config.toml         ./config/config.toml is prepended to the existing file
+#                       (inside marker comments, so re-runs replace it)
+#   alp-cf-models.json  copied as-is
 #
 # Usage: ./setup-codex.sh [--skip-prereq-checks]
 
@@ -43,13 +44,16 @@ while [ "$#" -gt 0 ]; do
 	shift
 done
 
-# The model catalog (a clone of Codex's gpt-5.5 entry) ships next to this script.
-CATALOG_SRC="$(dirname "$0")/config/codex-models-with-deepseek.json"
-if [ ! -f "$CATALOG_SRC" ]; then
-	err "model catalog not found: $CATALOG_SRC"
-	err "Run this script from a full checkout of the repository."
-	exit 1
-fi
+# The config and model catalog ship next to this script.
+TOML_SRC="$(dirname "$0")/config/config.toml"
+CATALOG_SRC="$(dirname "$0")/config/alp-cf-models.json"
+for f in "$TOML_SRC" "$CATALOG_SRC"; do
+	if [ ! -f "$f" ]; then
+		err "file not found: $f"
+		err "Run this script from a full checkout of the repository."
+		exit 1
+	fi
+done
 
 # Run a command as root, using sudo when we are not already root.
 # Returns non-zero if no privilege escalation is available.
@@ -217,33 +221,35 @@ fi
 # ---------- write configuration ----------
 mkdir -p "$TARGET_DIR"
 
-# Write config.toml with dynamic home directory resolution
-cat << EOF > "$TARGET_DIR/config.toml"
-# ---------- Model selection ----------
-model_provider = "cloudflare-ai-gateway"
-model = "deepseek-flash"
-model_reasoning_effort = "medium"
+CONFIG="$TARGET_DIR/config.toml"
+BEGIN_MARK="# >>> alphanome codex setup >>>"
+END_MARK="# <<< alphanome codex setup <<<"
 
-model_catalog_json = "~/.codex/codex-models-with-deepseek.json"
+# TOML has no way to close a [table], so keys after a header belong to it.
+# Our file is therefore split at its first [table] header: its top-level keys
+# go at the very top (before any of the user's tables) and its tables go at
+# the very bottom (so they can't capture the user's top-level keys).
+# Marked blocks from a previous run are stripped, so re-runs never duplicate keys.
+# ponytail: header detection is a line starting with "[", fine while
+# config/config.toml has no multi-line arrays at the top level.
+touch "$CONFIG"
+cp "$CONFIG" "$CONFIG.bak"
+tmp="$TARGET_DIR/.config.toml.tmp.$$"
+{
+	printf '%s\n' "$BEGIN_MARK"
+	awk '/^\[/ { exit } 1' "$TOML_SRC"
+	printf '%s\n' "$END_MARK"
+	awk -v b="$BEGIN_MARK" -v e="$END_MARK" \
+		'$0 == b { skip = 1; next } $0 == e { skip = 0; next } !skip' "$CONFIG"
+	printf '%s\n' "$BEGIN_MARK"
+	awk 'found || /^\[/ { found = 1; print }' "$TOML_SRC"
+	printf '%s\n' "$END_MARK"
+} > "$tmp"
+# cat-into rather than mv: keeps the existing file's permissions and symlinks.
+cat "$tmp" > "$CONFIG"
+rm -f "$tmp"
 
-# ---------- Cloudflare AI Gateway ----------
-
-[model_providers.cloudflare-ai-gateway]
-name = "Alphanome"
-base_url = "https://inference.domesly.com/deepseek"
-wire_api = "responses"
-
-# Per-token cost reported to the gateway, in USD per token.
-http_headers = { "cf-aig-custom-cost" = '{"per_token_in":0.0000003,"per_token_out":0.0000012,"per_cache_read_token":0.000000006,"per_cache_write_token":0.000000006}' }
-
-[model_providers.cloudflare-ai-gateway.auth]
-command = "cloudflared"
-args = ["access", "login", "--no-verbose", "https://inference.domesly.com"]
-timeout_ms = 30000
-refresh_interval_ms = 0
-EOF
-
-# Copy the model catalog matching the model_catalog_json path
-cp "$CATALOG_SRC" "$TARGET_DIR/codex-models-with-deepseek.json"
+# Copied under its own name, which model_catalog_json in config.toml points at.
+cp "$CATALOG_SRC" "$TARGET_DIR/"
 
 echo "Successfully written configuration files to $TARGET_DIR"
