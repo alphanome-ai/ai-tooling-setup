@@ -202,7 +202,11 @@ $EndMark    = "# <<< alphanome codex setup <<<"
 $head = [System.Collections.Generic.List[string]]::new()
 $tail = [System.Collections.Generic.List[string]]::new()
 $inTables = $false
+# Codex doesn't expand "~" on Windows, so point the catalog at an absolute path.
+# Forward slashes keep the TOML string free of backslash escapes.
+$CatalogPath = (Join-Path $TargetDir "alp-cf-models.json") -replace '\\', '/'
 foreach ($line in [System.IO.File]::ReadAllLines($TomlSrc)) {
+    if ($line -match '^model_catalog_json\s*=') { $line = "model_catalog_json = `"$CatalogPath`"" }
     if ($line -match '^\[') { $inTables = $true }
     if ($inTables) { $tail.Add($line) } else { $head.Add($line) }
 }
