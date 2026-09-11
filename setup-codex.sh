@@ -1,7 +1,220 @@
 #!/bin/sh
+# Codex CLI setup for Alphanome's Cloudflare AI Gateway (DeepSeek V4.1-Flash).
+#
+# Writes these two files into $HOME/.codex/:
+#   config.toml
+#   codex-models-with-deepseek.json  (copied from ./config/)
+#
+# Usage: ./setup-codex.sh [--skip-prereq-checks]
+
 set -e
 
 TARGET_DIR="$HOME/.codex"
+SKIP_PREREQ_CHECKS=0
+
+CLOUDFLARED_RELEASES="https://github.com/cloudflare/cloudflared/releases/latest/download"
+
+say()  { printf '%s\n' "$*"; }
+warn() { printf 'warning: %s\n' "$*" >&2; }
+err()  { printf 'error: %s\n' "$*" >&2; }
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+usage() {
+	cat <<'USAGE'
+Usage: setup-codex.sh [options]
+
+Writes Codex CLI configuration into $HOME/.codex/.
+
+Options:
+  -h, --help             Show this help and exit.
+  --skip-prereq-checks   Write the config even if codex and/or cloudflared are
+                         missing. Useful when provisioning an image where the
+                         tools get installed later.
+USAGE
+}
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		-h|--help) usage; exit 0 ;;
+		--skip-prereq-checks) SKIP_PREREQ_CHECKS=1 ;;
+		*) err "unknown option: $1"; usage >&2; exit 2 ;;
+	esac
+	shift
+done
+
+# The model catalog (a clone of Codex's gpt-5.5 entry) ships next to this script.
+CATALOG_SRC="$(dirname "$0")/config/codex-models-with-deepseek.json"
+if [ ! -f "$CATALOG_SRC" ]; then
+	err "model catalog not found: $CATALOG_SRC"
+	err "Run this script from a full checkout of the repository."
+	exit 1
+fi
+
+# Run a command as root, using sudo when we are not already root.
+# Returns non-zero if no privilege escalation is available.
+run_root() {
+	if [ "$(id -u)" = "0" ]; then
+		"$@"
+	elif have sudo; then
+		sudo "$@"
+	else
+		return 1
+	fi
+}
+
+# Map this machine's architecture onto a cloudflared release asset suffix.
+# Echoes "amd64" or "arm64", or nothing when unsupported.
+cloudflared_arch() {
+	case "$(uname -m)" in
+		x86_64|amd64) echo amd64 ;;
+		aarch64|arm64) echo arm64 ;;
+		*) : ;;
+	esac
+}
+
+install_cloudflared() {
+	# macOS, and Linuxbrew: the package manager handles everything.
+	if have brew; then
+		say "Installing cloudflared with Homebrew..."
+		brew install cloudflared && return 0
+		return 1
+	fi
+
+	have curl || return 1
+	arch=$(cloudflared_arch)
+	[ -n "$arch" ] || { warn "Unsupported architecture: $(uname -m)"; return 1; }
+
+	# Debian / Ubuntu: install the .deb from Cloudflare's release page.
+	if have apt-get && have dpkg; then
+		asset="cloudflared-linux-$arch.deb"
+		tmp="${TMPDIR:-/tmp}/$asset"
+		say "Downloading $asset..."
+		curl -fL --retry 3 --connect-timeout 20 -o "$tmp" "$CLOUDFLARED_RELEASES/$asset" || return 1
+		say "Installing (this may prompt for your password)..."
+		run_root dpkg -i "$tmp" && return 0
+		return 1
+	fi
+
+	# RHEL / Fedora / Amazon Linux: install the .rpm.
+	if have dnf || have yum; then
+		case "$arch" in
+			amd64) asset="cloudflared-linux-x86_64.rpm" ;;
+			arm64) asset="cloudflared-linux-aarch64.rpm" ;;
+		esac
+		tmp="${TMPDIR:-/tmp}/$asset"
+		say "Downloading $asset..."
+		curl -fL --retry 3 --connect-timeout 20 -o "$tmp" "$CLOUDFLARED_RELEASES/$asset" || return 1
+		say "Installing (this may prompt for your password)..."
+		run_root rpm -Uvh --replacepkgs "$tmp" && return 0
+		return 1
+	fi
+
+	# Anything else on Linux: drop the static binary into /usr/local/bin.
+	asset="cloudflared-linux-$arch"
+	tmp="${TMPDIR:-/tmp}/$asset"
+	say "Downloading $asset..."
+	curl -fL --retry 3 --connect-timeout 20 -o "$tmp" "$CLOUDFLARED_RELEASES/$asset" || return 1
+	say "Installing to /usr/local/bin (this may prompt for your password)..."
+	run_root cp "$tmp" /usr/local/bin/cloudflared || return 1
+	run_root chmod 0755 /usr/local/bin/cloudflared || return 1
+	return 0
+}
+
+cloudflared_manual_instructions() {
+	cat <<'EOS' >&2
+
+Install cloudflared manually, then re-run this script:
+
+  macOS           brew install cloudflared
+  Windows         winget install --id Cloudflare.cloudflared -e
+
+  Debian/Ubuntu   curl -fL -o /tmp/cloudflared.deb \
+                    https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+                  sudo dpkg -i /tmp/cloudflared.deb
+
+  RHEL/Fedora     sudo rpm -Uvh \
+                    https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-x86_64.rpm
+
+  Other Linux     download a static binary from
+                    https://github.com/cloudflare/cloudflared/releases
+                  then: install -m 0755 cloudflared-linux-amd64 /usr/local/bin/cloudflared
+
+Docs: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
+EOS
+}
+
+# Homebrew on macOS; otherwise (or if brew fails) OpenAI's standalone
+# installer, which installs to ~/.local/bin without sudo.
+install_codex() {
+	say "Codex CLI not found; installing..."
+	if [ "$(uname -s)" = "Darwin" ] && have brew; then
+		brew install --cask codex && return 0
+	fi
+	have curl || return 1
+	# CODEX_NON_INTERACTIVE stops the installer offering to launch Codex before
+	# our config is written.
+	curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh || return 1
+	# The installer updates shell profiles for future sessions; this one needs it now.
+	PATH="${CODEX_INSTALL_DIR:-$HOME/.local/bin}:$PATH"
+}
+
+MISSING_PREREQS=0
+
+# ---------- prerequisite: Codex CLI ----------
+# The config is useless without the client, so report this clearly. Whether to
+# stop is decided after both checks have run, so the user sees every problem in
+# one pass.
+if have codex; then
+	say "Found Codex CLI: $(command -v codex)"
+elif install_codex && have codex; then
+	say "Installed Codex CLI: $(command -v codex)"
+else
+	err "Codex CLI not found on your PATH, and automatic installation failed."
+	cat <<'EOS' >&2
+
+Install the Codex CLI, then re-run this script:
+
+  macOS (Homebrew)      brew install --cask codex
+  macOS / Linux         curl -fsSL https://chatgpt.com/codex/install.sh | sh
+  npm (all platforms)   npm install -g @openai/codex
+
+Docs: https://developers.openai.com/codex/cli
+EOS
+	MISSING_PREREQS=1
+fi
+
+# ---------- prerequisite: cloudflared ----------
+# Required by the auth block in config.toml: it performs the Cloudflare Access
+# login that authenticates requests to the gateway.
+if have cloudflared; then
+	say "Found cloudflared: $(command -v cloudflared)"
+else
+	warn "cloudflared not found (required for gateway authentication)."
+	say "Attempting to install cloudflared..."
+	if install_cloudflared; then
+		if have cloudflared; then
+			say "Installed cloudflared: $(command -v cloudflared)"
+		else
+			# Package managers can install outside the current shell's PATH.
+			warn "cloudflared was installed, but is not on this shell's PATH yet."
+			warn "Open a new terminal and re-run this script."
+			MISSING_PREREQS=1
+		fi
+	else
+		warn "Automatic installation failed or is not supported on this system."
+		cloudflared_manual_instructions
+		MISSING_PREREQS=1
+	fi
+fi
+
+if [ "$MISSING_PREREQS" = "1" ] && [ "$SKIP_PREREQ_CHECKS" = "0" ]; then
+	err "Missing prerequisites; config was NOT written."
+	err "Resolve the items above and re-run, or pass --skip-prereq-checks to write the config anyway."
+	exit 1
+fi
+
+# ---------- write configuration ----------
 mkdir -p "$TARGET_DIR"
 
 # Write config.toml with dynamic home directory resolution
@@ -14,7 +227,6 @@ model_reasoning_effort = "medium"
 model_catalog_json = "~/.codex/codex-models-with-deepseek.json"
 
 # ---------- Cloudflare AI Gateway ----------
-notify = ["$HOME/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient", "turn-ended"]
 
 [model_providers.cloudflare-ai-gateway]
 name = "Alphanome"
@@ -31,48 +243,7 @@ timeout_ms = 30000
 refresh_interval_ms = 0
 EOF
 
-# Write model definition catalog matching model_catalog_json path
-cat << 'EOF' > "$TARGET_DIR/codex-models-with-deepseek.json"
-{
-  "models": [
-    {
-      "slug": "deepseek-flash",
-      "display_name": "DeepSeek V4.1-Flash",
-      "supported_reasoning_levels": [
-        {
-          "effort": "none",
-          "description": "Thinking disabled"
-        },
-        {
-          "effort": "low",
-          "description": "Fast responses with lighter reasoning"
-        },
-        {
-          "effort": "high",
-          "description": "Greater reasoning depth for complex problems"
-        },
-        {
-          "effort": "max",
-          "description": "Maximum reasoning depth"
-        }
-      ],
-      "shell_type": "unified_exec",
-      "visibility": "list",
-      "supported_in_api": true,
-      "priority": 1,
-      "support_verbosity": true,
-      "truncation_policy": {
-        "mode": "bytes",
-        "limit": 10000
-      },
-      "experimental_supported_tools": [],
-      "context_window": 1000000,
-      "max_context_window": 1000000,
-      "auto_review_model_override": "deepseek-flash",
-      "base_instructions": "You are DeepSeek V4.1-Flash running in the Codex CLI, a terminal-based coding assistant. You are expected to be precise, safe, and helpful."
-    }
-  ]
-}
-EOF
+# Copy the model catalog matching the model_catalog_json path
+cp "$CATALOG_SRC" "$TARGET_DIR/codex-models-with-deepseek.json"
 
 echo "Successfully written configuration files to $TARGET_DIR"
