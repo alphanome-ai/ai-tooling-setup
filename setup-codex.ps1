@@ -197,8 +197,11 @@ $EndMark    = "# <<< alphanome codex setup <<<"
 # go at the very top (before any of the user's tables) and its tables go at
 # the very bottom (so they can't capture the user's top-level keys).
 # Marked blocks from a previous run are stripped, so re-runs never duplicate keys.
+# Unmarked copies of our top-level keys and tables in the user's file are
+# dropped too, so ours replace them instead of duplicating them.
 # ponytail: header detection is a line starting with "[", fine while
-# config\config.toml has no multi-line arrays at the top level.
+# config\config.toml has no multi-line arrays at the top level. Keys are
+# matched by bare name; dotted or quoted top-level keys are left alone.
 $head = [System.Collections.Generic.List[string]]::new()
 $tail = [System.Collections.Generic.List[string]]::new()
 $inTables = $false
@@ -211,15 +214,27 @@ foreach ($line in [System.IO.File]::ReadAllLines($TomlSrc)) {
     if ($inTables) { $tail.Add($line) } else { $head.Add($line) }
 }
 
+function Get-TableHeader([string]$line) { ($line -replace '#.*', '') -replace '\s', '' }
+$KeyPattern = '^\s*([A-Za-z0-9_-]+)\s*='
+# HashSet is case-sensitive by default, like TOML keys.
+$ourKeys   = [System.Collections.Generic.HashSet[string]]::new()
+$ourTables = [System.Collections.Generic.HashSet[string]]::new()
+foreach ($line in $head) { if ($line -match $KeyPattern) { [void]$ourKeys.Add($Matches[1]) } }
+foreach ($line in $tail) { if ($line -match '^\[') { [void]$ourTables.Add((Get-TableHeader $line)) } }
+
 $lines = [System.Collections.Generic.List[string]]::new()
 $lines.Add($BeginMark); $lines.AddRange($head); $lines.Add($EndMark)
 if (Test-Path $ConfigPath) {
     Copy-Item -Path $ConfigPath -Destination "$ConfigPath.bak" -Force
-    $skip = $false
+    $skip = $false; $userTables = $false; $drop = $false
     foreach ($line in [System.IO.File]::ReadAllLines($ConfigPath)) {
         if ($line -eq $BeginMark) { $skip = $true;  continue }
         if ($line -eq $EndMark)   { $skip = $false; continue }
-        if (-not $skip) { $lines.Add($line) }
+        if ($skip) { continue }
+        if ($line -match '^\[') { $userTables = $true; $drop = $ourTables.Contains((Get-TableHeader $line)) }
+        if ($drop) { continue }
+        if (-not $userTables -and $line -match $KeyPattern -and $ourKeys.Contains($Matches[1])) { continue }
+        $lines.Add($line)
     }
 }
 $lines.Add($BeginMark); $lines.AddRange($tail); $lines.Add($EndMark)

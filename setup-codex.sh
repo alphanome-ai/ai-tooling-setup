@@ -239,8 +239,11 @@ END_MARK="# <<< alphanome codex setup <<<"
 # go at the very top (before any of the user's tables) and its tables go at
 # the very bottom (so they can't capture the user's top-level keys).
 # Marked blocks from a previous run are stripped, so re-runs never duplicate keys.
+# Unmarked copies of our top-level keys and tables in the user's file are
+# dropped too, so ours replace them instead of duplicating them.
 # ponytail: header detection is a line starting with "[", fine while
-# config/config.toml has no multi-line arrays at the top level.
+# config/config.toml has no multi-line arrays at the top level. Keys are
+# matched by bare name; dotted or quoted top-level keys are left alone.
 touch "$CONFIG"
 cp "$CONFIG" "$CONFIG.bak"
 tmp="$TARGET_DIR/.config.toml.tmp.$$"
@@ -248,8 +251,23 @@ tmp="$TARGET_DIR/.config.toml.tmp.$$"
 	printf '%s\n' "$BEGIN_MARK"
 	awk '/^\[/ { exit } 1' "$TOML_SRC"
 	printf '%s\n' "$END_MARK"
-	awk -v b="$BEGIN_MARK" -v e="$END_MARK" \
-		'$0 == b { skip = 1; next } $0 == e { skip = 0; next } !skip' "$CONFIG"
+	awk -v b="$BEGIN_MARK" -v e="$END_MARK" '
+		function header(s) { sub(/#.*/, "", s); gsub(/[ \t]/, "", s); return s }
+		function key(s) { if (!match(s, /^[ \t]*[A-Za-z0-9_-]+[ \t]*=/)) return ""; s = substr(s, 1, RLENGTH); gsub(/[ \t=]/, "", s); return s }
+		# First file (ours): collect its top-level key names and table headers.
+		NR == FNR {
+			if (/^\[/) { tables[header($0)] = 1; in_tables = 1 }
+			else if (!in_tables && key($0) != "") keys[key($0)] = 1
+			next
+		}
+		$0 == b { skip = 1; next }
+		$0 == e { skip = 0; next }
+		skip { next }
+		/^\[/ { user_tables = 1; drop = (header($0) in tables) }
+		drop { next }
+		!user_tables && (key($0) in keys) { next }
+		1
+	' "$TOML_SRC" "$CONFIG"
 	printf '%s\n' "$BEGIN_MARK"
 	awk 'found || /^\[/ { found = 1; print }' "$TOML_SRC"
 	printf '%s\n' "$END_MARK"
