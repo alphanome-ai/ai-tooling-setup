@@ -1,4 +1,4 @@
-# Codex CLI setup — Alphanome DeepSeek V4.1-Flash
+# Codex setup — Alphanome
 
 One-shot setup scripts that point the Codex CLI at Alphanome's Cloudflare AI
 Gateway endpoint and register **DeepSeek V4.1-Flash** as the default model.
