@@ -3,7 +3,8 @@
     Configures the Codex CLI for Alphanome's Cloudflare AI Gateway (DeepSeek V4.1-Flash).
 
 .DESCRIPTION
-    Installs into %USERPROFILE%\.codex\, from .\config\ (the source of truth):
+    Installs into %USERPROFILE%\.codex\, from .\config\ (the source of truth),
+    or from the latest GitHub release when run standalone:
         config.toml         .\config\config.toml is prepended to the existing
                             file (inside marker comments, so re-runs replace it)
         alp-cf-models.json  copied as-is
@@ -31,16 +32,29 @@ $ErrorActionPreference = "Stop"
 $TargetDir           = Join-Path $HOME ".codex"
 $CloudflaredReleases = "https://github.com/cloudflare/cloudflared/releases/latest/download"
 
-# The config and model catalog ship next to this script.
-$TomlSrc    = Join-Path $PSScriptRoot "config\config.toml"
-$CatalogSrc = Join-Path $PSScriptRoot "config\alp-cf-models.json"
-foreach ($f in $TomlSrc, $CatalogSrc) {
-    if (-not (Test-Path $f)) {
-        [Console]::Error.WriteLine("error: file not found: $f")
-        [Console]::Error.WriteLine("error: Run this script from a full checkout of the repository.")
-        exit 1
+$ReleaseUrl = "https://github.com/alphanome-ai/org-setup/releases/latest/download"
+
+# From a repo checkout, use .\config\. Run standalone (downloaded as a release
+# asset), fetch the same two files from the latest GitHub release.
+$SrcDir = Join-Path $PSScriptRoot "config"
+if (-not ((Test-Path (Join-Path $SrcDir "config.toml")) -and (Test-Path (Join-Path $SrcDir "alp-cf-models.json")))) {
+    # Windows PowerShell 5.1 may default to TLS 1.0, which GitHub rejects.
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    # ponytail: left in %TEMP% afterwards; two small files.
+    $SrcDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
+    New-Item -ItemType Directory -Path $SrcDir | Out-Null
+    foreach ($f in "config.toml", "alp-cf-models.json") {
+        Write-Host "Downloading $f..."
+        try {
+            Invoke-WebRequest -Uri "$ReleaseUrl/$f" -OutFile (Join-Path $SrcDir $f) -UseBasicParsing
+        } catch {
+            [Console]::Error.WriteLine("error: download failed: $ReleaseUrl/$f")
+            exit 1
+        }
     }
 }
+$TomlSrc    = Join-Path $SrcDir "config.toml"
+$CatalogSrc = Join-Path $SrcDir "alp-cf-models.json"
 
 # Use [Console]::Error for warnings/errors: Write-Error would become a
 # terminating error under $ErrorActionPreference = "Stop".

@@ -4,10 +4,11 @@ One-shot setup scripts that point the Codex CLI at Alphanome's Cloudflare AI
 Gateway endpoint and register **DeepSeek V4.1-Flash** as the default model.
 
 Both scripts resolve the current user's home directory at runtime, so there is
-nothing user-specific to edit before distributing them. They read
-`config/config.toml` and `config/alp-cf-models.json` — the source of truth —
-so **run them from a full checkout of this repository**, not as standalone
-downloads. To change what gets installed, edit those two files, not the scripts.
+nothing user-specific to edit before distributing them. They install
+`config/config.toml` and `config/alp-cf-models.json` — the source of truth.
+Run from a checkout, a script uses those files next to it; run standalone (as a
+downloaded release asset), it downloads them from the latest GitHub release.
+To change what gets installed, edit those two files, not the scripts.
 They also **check that their prerequisites are present before writing anything**,
 so a machine that is missing the Codex CLI or cloudflared gets clear install
 instructions instead of a silently useless config.
@@ -93,18 +94,30 @@ config, because it fails later and less obviously.
 
 ## Install
 
+Download the script from the latest release, then run it. The script
+downloads the two config files it needs from the same release.
+
 ### macOS / Linux
 
 ```bash
-chmod +x setup-codex.sh
-./setup-codex.sh
+curl -fsSLO https://github.com/alphanome-ai/org-setup/releases/latest/download/setup-codex.sh
+sh setup-codex.sh
 ```
 
 ### Windows
 
 ```powershell
+irm https://github.com/alphanome-ai/org-setup/releases/latest/download/setup-codex.ps1 -OutFile setup-codex.ps1
 powershell -ExecutionPolicy Bypass -File setup-codex.ps1
 ```
+
+Download first, then run. Don't pipe the script straight into a shell
+(`curl ... | sh` or `irm ... | iex`). With `iex`, the script's `exit` would
+close your PowerShell window. With `sh`, a partly downloaded script could run
+halfway.
+
+From a checkout of this repo, run `./setup-codex.sh` or
+`setup-codex.ps1` directly; they use `config/` and download nothing.
 
 `-ExecutionPolicy Bypass` scopes the policy change to that single invocation; it
 does not change your machine-wide PowerShell settings.
@@ -133,6 +146,21 @@ powershell -ExecutionPolicy Bypass -File setup-codex.ps1 -SkipPrereqChecks
 | `0` | Config written, or `--help` shown. |
 | `1` | A prerequisite is missing; nothing was written. |
 | `2` | Unrecognised option (shell script only). |
+
+## Publishing a release
+
+The repo must be **public**: release assets of a private repo need a GitHub
+login to download, so the scripts' downloads would fail with 404. Publish all
+four files. The scripts fetch the config files by name from
+`releases/latest/download/`:
+
+```bash
+gh release create v1.0.0 --title "v1.0.0" --notes "Codex setup for Alphanome" \
+  setup-codex.sh setup-codex.ps1 config/config.toml config/alp-cf-models.json
+```
+
+Changing only the config? Cut a new release with the same four files.
+`latest` always points at the newest one.
 
 ## Verify the install
 
@@ -269,6 +297,7 @@ in place.
 | `Automatic installation failed or is not supported on this system.` | No supported package manager, no network, or no `sudo` | Follow the printed manual instructions, then re-run. |
 | `Missing prerequisites; config was NOT written.` | One of the two checks failed | Fix the reported item, or use `--skip-prereq-checks` / `-SkipPrereqChecks`. |
 | `error: unknown option: --foo` | Typo in a flag | Run with `--help`. |
+| `error: download failed: .../config.toml` (404) | Repo is private, no release exists, or the release is missing the config files | Make the repo public and publish all four assets (see *Publishing a release*). |
 | Codex reports a duplicate key in `config.toml` | Your existing config already set a key that `config/config.toml` sets | Delete your copy of that key (outside the markers). |
 | `cloudflared: command not found` at request time | It was installed after the shell started | Restart the shell, or check your `PATH`. |
 | Browser opens but requests still fail | Cloudflare Access login not completed, or not authorized for the app | Re-run and finish the browser login; confirm you're a member of the Access policy. |

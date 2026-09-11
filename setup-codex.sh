@@ -1,7 +1,8 @@
 #!/bin/sh
 # Codex CLI setup for Alphanome's Cloudflare AI Gateway (DeepSeek V4.1-Flash).
 #
-# Installs into $HOME/.codex/, from ./config/ (the source of truth):
+# Installs into $HOME/.codex/, from ./config/ (the source of truth), or from
+# the latest GitHub release when run standalone:
 #   config.toml         ./config/config.toml is prepended to the existing file
 #                       (inside marker comments, so re-runs replace it)
 #   alp-cf-models.json  copied as-is
@@ -14,6 +15,7 @@ TARGET_DIR="$HOME/.codex"
 SKIP_PREREQ_CHECKS=0
 
 CLOUDFLARED_RELEASES="https://github.com/cloudflare/cloudflared/releases/latest/download"
+RELEASE_URL="https://github.com/alphanome-ai/org-setup/releases/latest/download"
 
 say()  { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
@@ -44,16 +46,23 @@ while [ "$#" -gt 0 ]; do
 	shift
 done
 
-# The config and model catalog ship next to this script.
-TOML_SRC="$(dirname "$0")/config/config.toml"
-CATALOG_SRC="$(dirname "$0")/config/alp-cf-models.json"
-for f in "$TOML_SRC" "$CATALOG_SRC"; do
-	if [ ! -f "$f" ]; then
-		err "file not found: $f"
-		err "Run this script from a full checkout of the repository."
-		exit 1
-	fi
-done
+# From a repo checkout, use ./config/. Run standalone (downloaded as a release
+# asset), fetch the same two files from the latest GitHub release.
+SRC_DIR="$(dirname "$0")/config"
+if [ ! -f "$SRC_DIR/config.toml" ] || [ ! -f "$SRC_DIR/alp-cf-models.json" ]; then
+	have curl || { err "curl is required to download the config files."; exit 1; }
+	SRC_DIR=$(mktemp -d)
+	trap 'rm -rf "$SRC_DIR"' EXIT
+	for f in config.toml alp-cf-models.json; do
+		say "Downloading $f..."
+		if ! curl -fsSL --retry 3 --connect-timeout 20 -o "$SRC_DIR/$f" "$RELEASE_URL/$f"; then
+			err "download failed: $RELEASE_URL/$f"
+			exit 1
+		fi
+	done
+fi
+TOML_SRC="$SRC_DIR/config.toml"
+CATALOG_SRC="$SRC_DIR/alp-cf-models.json"
 
 # Run a command as root, using sudo when we are not already root.
 # Returns non-zero if no privilege escalation is available.
