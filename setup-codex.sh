@@ -15,7 +15,7 @@ TARGET_DIR="$HOME/.codex"
 SKIP_PREREQ_CHECKS=0
 
 CLOUDFLARED_RELEASES="https://github.com/cloudflare/cloudflared/releases/latest/download"
-RELEASE_URL="https://github.com/alphanome-ai/org-setup/releases/latest/download"
+RELEASE_URL="https://github.com/alphanome-ai/ai-tooling-setup/releases/latest/download"
 
 say()  { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }

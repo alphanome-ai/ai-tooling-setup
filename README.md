@@ -100,14 +100,14 @@ downloads the two config files it needs from the same release.
 ### macOS / Linux
 
 ```bash
-curl -fsSLO https://github.com/alphanome-ai/org-setup/releases/latest/download/setup-codex.sh
+curl -fsSLO https://github.com/alphanome-ai/ai-tooling-setup/releases/latest/download/setup-codex.sh
 sh setup-codex.sh
 ```
 
 ### Windows
 
 ```powershell
-irm https://github.com/alphanome-ai/org-setup/releases/latest/download/setup-codex.ps1 -OutFile setup-codex.ps1
+irm https://github.com/alphanome-ai/ai-tooling-setup/releases/latest/download/setup-codex.ps1 -OutFile setup-codex.ps1
 powershell -ExecutionPolicy Bypass -File setup-codex.ps1
 ```
 
@@ -152,12 +152,18 @@ powershell -ExecutionPolicy Bypass -File setup-codex.ps1 -SkipPrereqChecks
 The repo must be **public**: release assets of a private repo need a GitHub
 login to download, so the scripts' downloads would fail with 404. Publish all
 four files. The scripts fetch the config files by name from
-`releases/latest/download/`:
+`releases/latest/download/`. `scripts/release.sh` does this for you:
 
 ```bash
-gh release create v1.0.0 --title "v1.0.0" --notes "Codex setup for Alphanome" \
-  setup-codex.sh setup-codex.ps1 config/config.toml config/alp-cf-models.json
+scripts/release.sh --dry-run v1.0.0          # run the checks, publish nothing
+scripts/release.sh v1.0.0                    # tag HEAD as v1.0.0 and publish
+scripts/release.sh --notes "..." v1.0.0      # default: notes generated from commits
 ```
+
+It requires `gh` (logged in) and Python 3.11+. It refuses to publish unless you
+are on a clean `main` that matches `origin/main` and the version is newer than
+every existing tag. It also checks that the JSON and TOML parse, then tags
+`HEAD` and uploads all four files.
 
 Changing only the config? Cut a new release with the same four files.
 `latest` always points at the newest one.

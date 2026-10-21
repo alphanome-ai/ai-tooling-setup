@@ -32,7 +32,7 @@ $ErrorActionPreference = "Stop"
 $TargetDir           = Join-Path $HOME ".codex"
 $CloudflaredReleases = "https://github.com/cloudflare/cloudflared/releases/latest/download"
 
-$ReleaseUrl = "https://github.com/alphanome-ai/org-setup/releases/latest/download"
+$ReleaseUrl = "https://github.com/alphanome-ai/ai-tooling-setup/releases/latest/download"
 
 # From a repo checkout, use .\config\. Run standalone (downloaded as a release
 # asset), fetch the same two files from the latest GitHub release.
