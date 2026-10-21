@@ -2,7 +2,7 @@
 model_provider = "cloudflare-ai-gateway"
 model = "deepseek-flash"
 model_reasoning_effort = "medium"
-
+model_auto_compact_token_limit = 120000
 model_catalog_json = "~/.codex/alp-cf-models.json"
 
 # ---------- Cloudflare AI Gateway ----------
@@ -11,9 +11,6 @@ model_catalog_json = "~/.codex/alp-cf-models.json"
 name = "Alphanome"
 base_url = "https://inference.domesly.com/deepseek"
 wire_api = "responses"
-
-# Per-token cost reported to the gateway, in USD per token.
-http_headers = { "cf-aig-custom-cost" = '{"per_token_in":0.0000003,"per_token_out":0.0000012,"per_cache_read_token":0.000000006,"per_cache_write_token":0.000000006}' }
 
 [model_providers.cloudflare-ai-gateway.auth]
 command = "cloudflared"
